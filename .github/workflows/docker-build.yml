@@ -81,7 +81,7 @@ jobs:
         output-file: sbom-scanner-image.spdx.json
         
     - name: Upload SBOM as artifact
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: sbom-scanner-image-sbom
         path: sbom-scanner-image.spdx.json
