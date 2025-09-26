@@ -1,0 +1,83 @@
+# Simple Azure DevOps Task for Quick Integration
+# Use this for basic SBOM scanning without complex pipeline templates
+
+parameters:
+- name: projectType
+  displayName: 'Project Type (auto, dotnet, nodejs, python)'
+  type: string
+  default: 'auto'
+
+steps:
+- task: Bash@3
+  displayName: 'Pull and Run SBOM Scanner'
+  inputs:
+    targetType: 'inline'
+    script: |
+      #!/bin/bash
+      set -e
+      
+      # Configuration
+      PROJECT_TYPE="${{ parameters.projectType }}"
+      SCAN_PATH="$(Build.SourcesDirectory)"
+      OUTPUT_PATH="$(Build.ArtifactStagingDirectory)/sbom-reports"
+      DOCKER_IMAGE="sbom-scanner:latest"
+      
+      echo "Starting SBOM License Scan..."
+      echo "Project Type: $PROJECT_TYPE"
+      echo "Scan Path: $SCAN_PATH"
+      echo "Output Path: $OUTPUT_PATH"
+      
+      # Create output directory
+      mkdir -p "$OUTPUT_PATH"
+      
+      # Check if Docker image exists, if not build it
+      if ! docker image inspect "$DOCKER_IMAGE" >/dev/null 2>&1; then
+          echo "Building SBOM scanner Docker image..."
+          
+          # Ensure we have the Dockerfile
+          if [ ! -f "docker-sbom-scanner/Dockerfile" ]; then
+              echo "Error: Dockerfile not found at docker-sbom-scanner/Dockerfile"
+              echo "Please ensure the docker-sbom-scanner directory is in your repository"
+              exit 1
+          fi
+          
+          docker build -t "$DOCKER_IMAGE" docker-sbom-scanner/
+      fi
+      
+      # Run SBOM scanner
+      echo "Running SBOM scanner..."
+      docker run --rm \
+        -v "$SCAN_PATH:/workspace:ro" \
+        -v "$OUTPUT_PATH:/output" \
+        -e "BUILD_BUILDNUMBER=$(Build.BuildNumber)" \
+        -e "BUILD_REPOSITORY_NAME=$(Build.Repository.Name)" \
+        "$DOCKER_IMAGE" \
+        --type "$PROJECT_TYPE" \
+        --path /workspace \
+        --output /output \
+        --verbose
+      
+      # Check results
+      echo "Scanning completed. Generated files:"
+      find "$OUTPUT_PATH" -type f -name "*.spdx.json" -o -name "*.md" | while read -r file; do
+          echo "  - $(basename "$file")"
+      done
+      
+      # Basic validation
+      SBOM_COUNT=$(find "$OUTPUT_PATH" -name "*.spdx.json" | wc -l)
+      if [ "$SBOM_COUNT" -eq 0 ]; then
+          echo "##vso[task.logissue type=error]No SBOM files were generated!"
+          exit 1
+      fi
+      
+      echo "##vso[task.logissue type=success]Successfully generated $SBOM_COUNT SBOM file(s)"
+  env:
+    DOCKER_BUILDKIT: 1
+
+- task: PublishBuildArtifacts@1
+  displayName: 'Publish SBOM Results'
+  inputs:
+    pathToPublish: '$(Build.ArtifactStagingDirectory)/sbom-reports'
+    artifactName: 'sbom-reports'
+    publishLocation: 'Container'
+  condition: succeededOrFailed()

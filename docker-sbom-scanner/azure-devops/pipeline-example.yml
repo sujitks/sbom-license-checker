@@ -1,0 +1,179 @@
+# Complete Azure DevOps Pipeline Example
+# This pipeline demonstrates how to integrate SBOM scanning into your build process
+
+trigger:
+- main
+- develop
+
+variables:
+  dockerImageName: 'sbom-scanner'
+  dockerImageTag: '$(Build.BuildNumber)'
+  
+pool:
+  vmImage: 'ubuntu-latest'
+
+stages:
+- stage: BuildAndScan
+  displayName: 'Build and SBOM Scan'
+  jobs:
+  - job: BuildApplication
+    displayName: 'Build Application'
+    steps:
+    - checkout: self
+      fetchDepth: 1
+
+    # Build your application first
+    - task: DotNetCoreCLI@2
+      displayName: 'Restore .NET packages'
+      inputs:
+        command: 'restore'
+      condition: and(succeeded(), eq(variables['Build.Reason'], 'PullRequest'))
+
+    - task: Npm@1
+      displayName: 'Install npm packages'
+      inputs:
+        command: 'install'
+      condition: and(succeeded(), exists('package.json'))
+
+  - job: SBOMScan
+    displayName: 'SBOM License Scan'
+    dependsOn: BuildApplication
+    condition: succeeded()
+    steps:
+    - checkout: self
+      fetchDepth: 1
+
+    # Build the SBOM scanner Docker image
+    - task: Docker@2
+      displayName: 'Build SBOM Scanner Image'
+      inputs:
+        command: 'build'
+        dockerfile: 'docker-sbom-scanner/Dockerfile'
+        buildContext: 'docker-sbom-scanner'
+        tags: '$(dockerImageName):$(dockerImageTag)'
+
+    # Use the SBOM scanning template
+    - template: azure-devops/sbom-scan-template.yml
+      parameters:
+        projectType: 'auto'
+        scanPath: '$(Build.SourcesDirectory)'
+        outputPath: '$(Build.ArtifactStagingDirectory)/sbom-reports'
+        dockerImage: '$(dockerImageName):$(dockerImageTag)'
+        publishResults: true
+        failOnLicenseIssues: false
+        verboseOutput: false
+        githubToken: '$(GITHUB_TOKEN)'
+
+    # Additional security checks (optional)
+    - task: PowerShell@2
+      displayName: 'Check License Compliance Policy'
+      inputs:
+        targetType: 'inline'
+        script: |
+          $copyleftCount = [int]$env:COPYLEFTCOUNT
+          $unknownCount = [int]$env:UNKNOWNLICENSECOUNT
+          $resolutionRate = [double]$env:LICENSERESOLUTIONRATE
+          
+          Write-Host "License Policy Check:"
+          Write-Host "  Copyleft licenses: $copyleftCount"
+          Write-Host "  Unknown licenses: $unknownCount" 
+          Write-Host "  Resolution rate: $resolutionRate%"
+          
+          # Define your license policy here
+          $maxCopyleft = 5
+          $maxUnknown = 10
+          $minResolutionRate = 80.0
+          
+          $policyViolations = @()
+          
+          if ($copyleftCount -gt $maxCopyleft) {
+              $policyViolations += "Too many copyleft licenses ($copyleftCount > $maxCopyleft)"
+          }
+          
+          if ($unknownCount -gt $maxUnknown) {
+              $policyViolations += "Too many unknown licenses ($unknownCount > $maxUnknown)"
+          }
+          
+          if ($resolutionRate -lt $minResolutionRate) {
+              $policyViolations += "License resolution rate too low ($resolutionRate% < $minResolutionRate%)"
+          }
+          
+          if ($policyViolations.Count -gt 0) {
+              Write-Host "##vso[task.logissue type=warning]License policy violations found:"
+              foreach ($violation in $policyViolations) {
+                  Write-Host "##vso[task.logissue type=warning]  - $violation"
+              }
+              
+              # Uncomment to fail build on policy violations
+              # Write-Host "##vso[task.complete result=Failed;]License policy check failed"
+          } else {
+              Write-Host "##vso[task.logissue type=success]All license policy checks passed"
+          }
+
+- stage: SecurityReview
+  displayName: 'Security Review'
+  dependsOn: BuildAndScan
+  condition: and(succeeded(), eq(variables['Build.Reason'], 'PullRequest'))
+  jobs:
+  - job: LicenseReview
+    displayName: 'Manual License Review'
+    pool: server
+    steps:
+    - task: ManualValidation@0
+      displayName: 'Review SBOM Results'
+      inputs:
+        instructions: |
+          Please review the SBOM scan results:
+          
+          1. Check the license compliance summary
+          2. Review any copyleft licenses found
+          3. Verify unknown licenses are acceptable
+          4. Approve or reject the build
+          
+          SBOM artifacts are available in the build artifacts.
+        onTimeout: 'reject'
+      timeoutInMinutes: 1440 # 24 hours
+
+- stage: PublishResults
+  displayName: 'Publish Results'
+  dependsOn: 
+  - BuildAndScan
+  - SecurityReview
+  condition: and(succeeded(), eq(variables['Build.Reason'], 'IndividualCI'))
+  jobs:
+  - job: PublishSBOM
+    displayName: 'Publish SBOM Results'
+    steps:
+    - download: current
+      artifact: sbom-reports
+
+    # Upload to external security scanning tools
+    - task: Bash@3
+      displayName: 'Upload to Security Platform'
+      inputs:
+        targetType: 'inline'
+        script: |
+          # Example: Upload SBOM to your security scanning platform
+          echo "Uploading SBOM files to security platform..."
+          
+          # for file in $(Pipeline.Workspace)/sbom-reports/*.spdx.json; do
+          #   curl -X POST \
+          #     -H "Authorization: Bearer $SECURITY_API_TOKEN" \
+          #     -H "Content-Type: application/json" \
+          #     --data-binary "@$file" \
+          #     "https://your-security-platform.com/api/sbom/upload"
+          # done
+      env:
+        SECURITY_API_TOKEN: $(SECURITY_API_TOKEN)
+
+    # Store SBOM in artifact repository
+    - task: UniversalPackages@0
+      displayName: 'Publish SBOM Package'
+      inputs:
+        command: 'publish'
+        publishDirectory: '$(Pipeline.Workspace)/sbom-reports'
+        feedsToUsePublish: 'internal'
+        vstsFeedPublish: 'sbom-feed'
+        vstsFeedPackagePublish: 'sbom-$(Build.Repository.Name)'
+        versionOption: 'patch'
+        packagePublishDescription: 'SBOM for $(Build.Repository.Name) build $(Build.BuildNumber)'

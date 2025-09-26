@@ -1,0 +1,62 @@
+{
+    "name": "SBOM Development Environment",
+    "image": "ghcr.io/sujitks/sbom-scanner:latest",
+    
+    "features": {
+        "ghcr.io/devcontainers/features/git:1": {},
+        "ghcr.io/devcontainers/features/github-cli:1": {}
+    },
+    
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "ms-vscode.vscode-json",
+                "redhat.vscode-yaml",
+                "ms-dotnettools.csharp",
+                "ms-vscode.vscode-typescript-next",
+                "ms-python.python",
+                "ms-azuretools.vscode-docker",
+                "GitHub.copilot",
+                "GitHub.copilot-chat"
+            ],
+            "settings": {
+                "terminal.integrated.defaultProfile.linux": "bash",
+                "files.eol": "\n"
+            }
+        }
+    },
+    
+    "mounts": [
+        "source=/var/run/docker.sock,target=/var/run/docker.sock,type=bind"
+    ],
+    
+    "runArgs": [
+        "--privileged"
+    ],
+    
+    "containerEnv": {
+        "SBOM_OUTPUT_DIR": "/workspace/sbom-reports",
+        "DOTNET_CLI_TELEMETRY_OPTOUT": "1",
+        "DOTNET_SKIP_FIRST_TIME_EXPERIENCE": "1"
+    },
+    
+    "postCreateCommand": "echo 'SBOM Development Environment Ready!' && sbom-scanner --version",
+    
+    "workspaceFolder": "/workspace",
+    "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind",
+    
+    "forwardPorts": [3000, 5000, 8080],
+    "portsAttributes": {
+        "3000": {
+            "label": "Node.js App"
+        },
+        "5000": {
+            "label": ".NET App"
+        },
+        "8080": {
+            "label": "Python App"
+        }
+    },
+    
+    "remoteUser": "sbom"
+}

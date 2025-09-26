@@ -1,0 +1,265 @@
+# Azure DevOps Pipeline Template for SBOM License Scanning
+# Author: Sujit Singh
+# Usage: Include this template in your Azure DevOps pipelines
+
+parameters:
+- name: projectType
+  displayName: 'Project Type'
+  type: string
+  default: 'auto'
+  values:
+    - 'auto'
+    - 'dotnet'
+    - 'nodejs'
+    - 'python'
+
+- name: scanPath
+  displayName: 'Path to Scan'
+  type: string
+  default: '$(Build.SourcesDirectory)'
+
+- name: outputPath
+  displayName: 'Output Path'
+  type: string
+  default: '$(Build.ArtifactStagingDirectory)/sbom-reports'
+
+- name: dockerImage
+  displayName: 'SBOM Scanner Docker Image'
+  type: string
+  default: 'sbom-scanner:latest'
+
+- name: publishResults
+  displayName: 'Publish SBOM Results as Artifacts'
+  type: boolean
+  default: true
+
+- name: failOnLicenseIssues
+  displayName: 'Fail Build on License Issues'
+  type: boolean
+  default: false
+
+- name: verboseOutput
+  displayName: 'Enable Verbose Output'
+  type: boolean
+  default: false
+
+- name: githubToken
+  displayName: 'GitHub Token (for enhanced license resolution)'
+  type: string
+  default: ''
+
+steps:
+- task: Docker@2
+  displayName: 'Pull SBOM Scanner Image'
+  inputs:
+    command: 'pull'
+    arguments: '${{ parameters.dockerImage }}'
+  condition: ne('${{ parameters.dockerImage }}', '')
+
+- task: Bash@3
+  displayName: 'Create Output Directory'
+  inputs:
+    targetType: 'inline'
+    script: |
+      mkdir -p "${{ parameters.outputPath }}"
+      echo "Output directory created: ${{ parameters.outputPath }}"
+
+- task: Docker@2
+  displayName: 'Run SBOM License Scanner'
+  inputs:
+    command: 'run'
+    arguments: >-
+      --rm
+      -v "${{ parameters.scanPath }}:/workspace:ro"
+      -v "${{ parameters.outputPath }}:/output"
+      ${{ eq(parameters.githubToken, '') && '' or format('-e GITHUB_TOKEN="{0}"', parameters.githubToken) }}
+      -e BUILD_SOURCESDIRECTORY="$(Build.SourcesDirectory)"
+      -e BUILD_BUILDNUMBER="$(Build.BuildNumber)"
+      -e BUILD_REPOSITORY_NAME="$(Build.Repository.Name)"
+      ${{ parameters.dockerImage }}
+      --type ${{ parameters.projectType }}
+      --path /workspace
+      --output /output
+      ${{ eq(parameters.verboseOutput, true) && '--verbose' or '' }}
+  env:
+    GITHUB_TOKEN: ${{ parameters.githubToken }}
+
+- task: PowerShell@2
+  displayName: 'Validate SBOM Results'
+  inputs:
+    targetType: 'inline'
+    script: |
+      $outputPath = "${{ parameters.outputPath }}"
+      $sbomFiles = Get-ChildItem -Path $outputPath -Filter "*.spdx.json" -Recurse
+      
+      if ($sbomFiles.Count -eq 0) {
+          Write-Host "##vso[task.logissue type=error]No SBOM files generated!"
+          exit 1
+      }
+      
+      Write-Host "Found $($sbomFiles.Count) SBOM files:"
+      foreach ($file in $sbomFiles) {
+          $size = [math]::Round($file.Length / 1KB, 2)
+          Write-Host "  - $($file.Name) ($size KB)"
+          
+          # Basic JSON validation
+          try {
+              $content = Get-Content $file.FullName -Raw | ConvertFrom-Json
+              Write-Host "    ✓ Valid JSON structure"
+              
+              if ($content.packages) {
+                  Write-Host "    ✓ Contains $($content.packages.Count) packages"
+                  
+                  # Count resolved licenses
+                  $resolvedLicenses = ($content.packages | Where-Object { 
+                      $_.licenseConcluded -and $_.licenseConcluded -ne "NOASSERTION" 
+                  }).Count
+                  
+                  $successRate = if ($content.packages.Count -gt 0) { 
+                      [math]::Round(($resolvedLicenses / $content.packages.Count) * 100, 1) 
+                  } else { 0 }
+                  
+                  Write-Host "    ✓ License resolution: $resolvedLicenses/$($content.packages.Count) ($successRate%)"
+                  
+                  # Check for problematic licenses
+                  $gplLicenses = $content.packages | Where-Object { 
+                      $_.licenseConcluded -match "GPL|AGPL|LGPL" 
+                  }
+                  
+                  if ($gplLicenses.Count -gt 0) {
+                      Write-Host "    ⚠️ Found $($gplLicenses.Count) copyleft licenses (GPL/AGPL/LGPL)"
+                      foreach ($pkg in $gplLicenses) {
+                          Write-Host "      - $($pkg.name): $($pkg.licenseConcluded)"
+                      }
+                  }
+                  
+                  # Check for unknown licenses
+                  $unknownLicenses = $content.packages | Where-Object { 
+                      $_.licenseConcluded -eq "NOASSERTION" -or -not $_.licenseConcluded 
+                  }
+                  
+                  if ($unknownLicenses.Count -gt 0) {
+                      Write-Host "    ⚠️ Found $($unknownLicenses.Count) packages with unknown licenses"
+                      
+                      if ("${{ parameters.failOnLicenseIssues }}" -eq "True" -and $unknownLicenses.Count -gt ($content.packages.Count * 0.1)) {
+                          Write-Host "##vso[task.logissue type=error]Too many unresolved licenses ($($unknownLicenses.Count)/$($content.packages.Count))"
+                          exit 1
+                      }
+                  }
+                  
+              } else {
+                  Write-Host "    ⚠️ No packages found in SBOM"
+              }
+          }
+          catch {
+              Write-Host "##vso[task.logissue type=error]Invalid JSON in $($file.Name): $($_.Exception.Message)"
+              if ("${{ parameters.failOnLicenseIssues }}" -eq "True") {
+                  exit 1
+              }
+          }
+      }
+      
+      # Create build summary
+      $reportPath = Join-Path $outputPath "scan-report.md"
+      if (Test-Path $reportPath) {
+          Write-Host "##vso[task.addattachment type=Distributedtask.Core.Summary;name=SBOM Scan Report;]$reportPath"
+      }
+
+- ${{ if eq(parameters.publishResults, true) }}:
+  - task: PublishBuildArtifacts@1
+    displayName: 'Publish SBOM Reports'
+    inputs:
+      pathToPublish: '${{ parameters.outputPath }}'
+      artifactName: 'sbom-reports'
+      publishLocation: 'Container'
+    condition: succeededOrFailed()
+
+- task: PowerShell@2
+  displayName: 'Generate License Report Summary'
+  inputs:
+    targetType: 'inline'
+    script: |
+      $outputPath = "${{ parameters.outputPath }}"
+      $summaryPath = Join-Path $outputPath "license-compliance-summary.json"
+      
+      $summary = @{
+          buildNumber = "$(Build.BuildNumber)"
+          repository = "$(Build.Repository.Name)"
+          scanDate = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ssZ")
+          projectType = "${{ parameters.projectType }}"
+          totalProjects = 0
+          totalPackages = 0
+          resolvedLicenses = 0
+          copyleftLicenses = @()
+          unknownLicenses = @()
+          sbomFiles = @()
+      }
+      
+      $sbomFiles = Get-ChildItem -Path $outputPath -Filter "*.spdx.json" -Recurse
+      
+      foreach ($file in $sbomFiles) {
+          try {
+              $content = Get-Content $file.FullName -Raw | ConvertFrom-Json
+              $summary.totalProjects++
+              $summary.totalPackages += $content.packages.Count
+              
+              $resolved = ($content.packages | Where-Object { 
+                  $_.licenseConcluded -and $_.licenseConcluded -ne "NOASSERTION" 
+              }).Count
+              $summary.resolvedLicenses += $resolved
+              
+              # Track copyleft licenses
+              $content.packages | Where-Object { 
+                  $_.licenseConcluded -match "GPL|AGPL|LGPL" 
+              } | ForEach-Object {
+                  $summary.copyleftLicenses += @{
+                      package = $_.name
+                      version = $_.versionInfo
+                      license = $_.licenseConcluded
+                      project = $file.BaseName
+                  }
+              }
+              
+              # Track unknown licenses
+              $content.packages | Where-Object { 
+                  $_.licenseConcluded -eq "NOASSERTION" -or -not $_.licenseConcluded 
+              } | ForEach-Object {
+                  $summary.unknownLicenses += @{
+                      package = $_.name
+                      version = $_.versionInfo
+                      project = $file.BaseName
+                  }
+              }
+              
+              $summary.sbomFiles += @{
+                  name = $file.Name
+                  path = $file.FullName
+                  size = $file.Length
+                  packages = $content.packages.Count
+                  resolvedLicenses = $resolved
+              }
+          }
+          catch {
+              Write-Host "##vso[task.logissue type=warning]Failed to process $($file.Name): $($_.Exception.Message)"
+          }
+      }
+      
+      $summary.licenseResolutionRate = if ($summary.totalPackages -gt 0) {
+          [math]::Round(($summary.resolvedLicenses / $summary.totalPackages) * 100, 2)
+      } else { 0 }
+      
+      # Save summary
+      $summary | ConvertTo-Json -Depth 10 | Out-File -FilePath $summaryPath -Encoding UTF8
+      
+      Write-Host "License Compliance Summary:"
+      Write-Host "  Total Projects: $($summary.totalProjects)"
+      Write-Host "  Total Packages: $($summary.totalPackages)"
+      Write-Host "  License Resolution Rate: $($summary.licenseResolutionRate)%"
+      Write-Host "  Copyleft Licenses: $($summary.copyleftLicenses.Count)"
+      Write-Host "  Unknown Licenses: $($summary.unknownLicenses.Count)"
+      
+      # Set pipeline variables
+      Write-Host "##vso[task.setvariable variable=LicenseResolutionRate]$($summary.licenseResolutionRate)"
+      Write-Host "##vso[task.setvariable variable=TotalPackages]$($summary.totalPackages)"
+      Write-Host "##vso[task.setvariable variable=CopyleftCount]$($summary.copyleftLicenses.Count)"
+      Write-Host "##vso[task.setvariable variable=UnknownLicenseCount]$($summary.unknownLicenses.Count)"
