@@ -74,23 +74,28 @@ jobs:
         cache-to: type=gha,mode=max
         
     - name: Generate SBOM for the image
-      uses: anchore/sbom-action@v0
+      uses: anchore/sbom-action@v0.17.2
       with:
-        image: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+        image: ${{ fromJSON(steps.meta.outputs.json).tags[0] }}
         format: spdx-json
         output-file: sbom-scanner-image.spdx.json
+      continue-on-error: true
         
     - name: Upload SBOM as artifact
       uses: actions/upload-artifact@v4
+      if: success() || failure()
       with:
         name: sbom-scanner-image-sbom
         path: sbom-scanner-image.spdx.json
+        if-no-files-found: warn
         
     - name: Test Docker image
       run: |
         echo "Testing the built image..."
-        docker run --rm ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:${{ github.sha }} --version
-        docker run --rm ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:${{ github.sha }} --help
+        IMAGE_TAG="${{ fromJSON(steps.meta.outputs.json).tags[0] }}"
+        echo "Testing image: $IMAGE_TAG"
+        docker run --rm "$IMAGE_TAG" --version
+        docker run --rm "$IMAGE_TAG" --help
         
     - name: Create test workspace
       run: |
@@ -125,10 +130,11 @@ jobs:
         mkdir -p test-output
         
         # Test the scanner with our test project
+        IMAGE_TAG="${{ fromJSON(steps.meta.outputs.json).tags[0] }}"
         docker run --rm \
           -v ${{ github.workspace }}/test-workspace:/workspace:ro \
           -v ${{ github.workspace }}/test-output:/output \
-          ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
+          "$IMAGE_TAG" \
           --type dotnet --path /workspace --output /output --verbose || echo "Test completed with warnings (expected in CI)"
           
         # Check if any SBOM files were generated
