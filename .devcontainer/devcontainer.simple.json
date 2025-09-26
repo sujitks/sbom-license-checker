@@ -1,16 +1,20 @@
 {
-    "name": "SBOM Scanner Development",
-    "build": {
-        "dockerfile": "../docker-sbom-scanner/Dockerfile",
-        "context": "../docker-sbom-scanner",
-        "args": {
-            "BUILDKIT_INLINE_CACHE": "1"
-        }
-    },
+    "name": "SBOM Scanner Simple Dev",
+    "image": "mcr.microsoft.com/dotnet/sdk:9.0-alpine",
     
     "features": {
         "ghcr.io/devcontainers/features/git:1": {},
-        "ghcr.io/devcontainers/features/github-cli:1": {}
+        "ghcr.io/devcontainers/features/github-cli:1": {},
+        "ghcr.io/devcontainers/features/node:1": {
+            "version": "20"
+        },
+        "ghcr.io/devcontainers/features/python:1": {
+            "version": "3.13"
+        },
+        "ghcr.io/devcontainers/features/docker-in-docker:2": {
+            "version": "latest",
+            "enableNonRootDocker": "true"
+        }
     },
     
     "customizations": {
@@ -23,17 +27,11 @@
                 "ms-python.python",
                 "ms-azuretools.vscode-docker",
                 "GitHub.copilot",
-                "GitHub.copilot-chat",
-                "ms-vscode.powershell",
-                "redhat.ansible"
+                "GitHub.copilot-chat"
             ],
             "settings": {
                 "terminal.integrated.defaultProfile.linux": "bash",
-                "files.eol": "\n",
-                "editor.formatOnSave": true,
-                "editor.codeActionsOnSave": {
-                    "source.organizeImports": "explicit"
-                }
+                "files.eol": "\n"
             }
         }
     },
@@ -47,13 +45,13 @@
     
     "postCreateCommand": [
         "bash", "-c", 
-        "echo 'Setting up development environment...' && chmod +x /app/*.sh && echo 'SBOM Scanner Development Environment Ready!' && /app/entrypoint.sh --version"
+        "echo 'Setting up SBOM Scanner development environment...' && apk add --no-cache jq curl bash && dotnet tool install --global Microsoft.Sbom.DotNetTool && python3 -m pip install --user pip-licenses pipdeptree requests && npm install -g license-checker --silent && echo 'Development environment ready!'"
     ],
     
     "workspaceFolder": "/workspace",
     "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind",
     
-    "forwardPorts": [3000, 5000, 8080, 9229],
+    "forwardPorts": [3000, 5000, 8080],
     "portsAttributes": {
         "3000": {
             "label": "Node.js App"
@@ -63,11 +61,8 @@
         },
         "8080": {
             "label": "Python App"
-        },
-        "9229": {
-            "label": "Node.js Debug"
         }
     },
     
-    "remoteUser": "sbom"
+    "remoteUser": "vscode"
 }

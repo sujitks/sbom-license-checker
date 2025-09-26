@@ -182,6 +182,30 @@ docker version
 # Command Palette: "Dev Containers: Rebuild Container"
 ```
 
+### Docker Build Errors (RUN --mount issues)
+If you see errors like `ERROR [dev_containers_target_stage 6/6] RUN --mount=type=bind`, try these solutions:
+
+**Option 1: Use Simple Development Config**
+```bash
+# Copy the simple config
+cp .devcontainer/devcontainer.simple.json .devcontainer/devcontainer.json
+# Command Palette: "Dev Containers: Rebuild Container"
+```
+
+**Option 2: Use Production Image Instead**
+```bash
+# Revert to production config
+git checkout .devcontainer/devcontainer.json
+# Command Palette: "Dev Containers: Reopen in Container"
+```
+
+**Option 3: Update Docker Desktop**
+```bash
+# Make sure you have Docker Desktop 4.0+ with BuildKit support
+docker version
+# Update Docker Desktop if needed
+```
+
 ### Permission Issues
 ```bash
 # Fix ownership in container
