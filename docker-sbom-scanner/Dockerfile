@@ -24,11 +24,12 @@ WORKDIR /app
 # Install .NET SBOM Tool
 RUN dotnet tool install --global Microsoft.Sbom.DotNetTool
 
-# Add .NET tools to PATH
-ENV PATH="$PATH:/root/.dotnet/tools"
+# Add .NET tools and Python venv to PATH
+ENV PATH="$PATH:/root/.dotnet/tools:/app/venv/bin"
 
-# Install Python packages for license detection
-RUN pip3 install --no-cache-dir \
+# Install Python packages for license detection using virtual environment
+RUN python3 -m venv /app/venv && \
+    /app/venv/bin/pip install --no-cache-dir \
     pip-licenses \
     pipdeptree \
     requests
@@ -36,16 +37,15 @@ RUN pip3 install --no-cache-dir \
 # Install Node.js license checker globally
 RUN npm install -g license-checker --silent
 
-# Create directories for scripts and output
-RUN mkdir -p /app/scripts /app/output /app/temp
+# Create directories for output
+RUN mkdir -p /app/output /app/temp
 
 # Copy scanner scripts
-COPY scripts/ /app/scripts/
 COPY entrypoint.sh /app/
 COPY scanner.sh /app/
 
 # Make scripts executable
-RUN chmod +x /app/entrypoint.sh /app/scanner.sh /app/scripts/*.sh
+RUN chmod +x /app/entrypoint.sh /app/scanner.sh
 
 # Set environment variables
 ENV SBOM_OUTPUT_DIR="/app/output"
