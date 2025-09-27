@@ -53,8 +53,9 @@ RUN mkdir -p /app/output /app/temp
 COPY entrypoint.sh /app/
 COPY scanner.sh /app/
 
-# Make scripts executable
-RUN chmod +x /app/entrypoint.sh /app/scanner.sh
+# Make scripts executable and create sbom-scanner command alias
+RUN chmod +x /app/entrypoint.sh /app/scanner.sh && \
+    ln -sf /app/entrypoint.sh /usr/local/bin/sbom-scanner
 
 # Set environment variables
 ENV SBOM_OUTPUT_DIR="/app/output"

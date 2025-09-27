@@ -47,6 +47,63 @@ log_warning() {
     echo -e "${YELLOW}[$(date '+%Y-%m-%d %H:%M:%S')] ⚠${NC} $1"
 }
 
+# Setup Python PATH for pip-licenses
+setup_python_path() {
+    # Check if pip-licenses is already available
+    if command -v pip-licenses >/dev/null 2>&1; then
+        log "pip-licenses found in PATH"
+        return 0
+    fi
+    
+    log "pip-licenses not found in PATH, attempting auto-detection..."
+    
+    # Get Python version for path detection
+    local python_version=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null)
+    
+    if [ -z "$python_version" ]; then
+        log_warning "Could not detect Python version"
+        return 1
+    fi
+    
+    # Common locations for user-installed Python packages
+    local python_user_paths=(
+        "$HOME/Library/Python/$python_version/bin"     # macOS
+        "$HOME/.local/bin"                              # Linux/Unix
+        "$HOME/Library/Python/*/bin"                   # macOS wildcard
+    )
+    
+    # Try to find pip-licenses in user paths
+    for user_path in "${python_user_paths[@]}"; do
+        # Handle wildcard paths
+        if [[ "$user_path" == *"*"* ]]; then
+            for expanded_path in $user_path; do
+                if [ -f "$expanded_path/pip-licenses" ]; then
+                    log "Found pip-licenses in: $expanded_path"
+                    export PATH="$expanded_path:$PATH"
+                    return 0
+                fi
+            done
+        elif [ -f "$user_path/pip-licenses" ]; then
+            log "Found pip-licenses in: $user_path"
+            export PATH="$user_path:$PATH"
+            return 0
+        fi
+    done
+    
+    # If not found, try to install it
+    log_warning "pip-licenses not found, attempting installation..."
+    if pip3 install --user pip-licenses --break-system-packages --quiet 2>/dev/null; then
+        log_success "pip-licenses installed successfully"
+        # Try to set up PATH again after installation
+        setup_python_path
+        return $?
+    else
+        log_error "Failed to install pip-licenses automatically"
+        log "Please install manually with: pip3 install --user pip-licenses --break-system-packages"
+        return 1
+    fi
+}
+
 # Auto-detect project type
 detect_project_type() {
     local scan_path="$1"
@@ -482,6 +539,9 @@ scan_python_project() {
     # Generate license report using pip-licenses
     log "Analyzing licenses with pip-licenses..."
     local license_file="$report_dir/python-licenses.json"
+    
+    # Auto-detect and configure pip-licenses PATH
+    setup_python_path
     
     # Try to use virtual environment pip-licenses first, then fall back to system
     local pip_licenses_cmd="pip-licenses"
