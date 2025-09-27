@@ -16,6 +16,22 @@ fi
 
 echo "✅ .NET CLI found: $(which dotnet)"
 
+# Check available .NET runtimes
+echo ""
+echo "📋 Available .NET runtimes:"
+dotnet --list-runtimes
+
+# Check if .NET 8.0 runtime is available (required for SBOM tool)
+if ! dotnet --list-runtimes | grep -q "Microsoft.NETCore.App 8\."; then
+    echo "⚠️  .NET 8.0 runtime not found - SBOM tool may not work"
+    echo "💡 The SBOM tool requires .NET 8.0 runtime"
+    echo "   Available alternatives:"
+    echo "   - Use the full SBOM scanner: /app/entrypoint.sh"
+    echo "   - Install .NET 8.0 runtime manually"
+else
+    echo "✅ .NET 8.0 runtime found"
+fi
+
 # Check current .NET tools
 echo ""
 echo "📋 Current .NET tools:"

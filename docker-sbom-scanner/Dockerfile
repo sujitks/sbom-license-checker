@@ -3,7 +3,7 @@
 # Author: Sujit Singh
 # Usage: docker run sbom-scanner [project-type] [path]
 
-FROM mcr.microsoft.com/dotnet/sdk:9.0-alpine AS base
+FROM mcr.microsoft.com/dotnet/sdk:8.0-alpine AS base
 
 # Install system dependencies
 RUN apk add --no-cache \
@@ -21,8 +21,17 @@ RUN apk add --no-cache \
 # Set working directory
 WORKDIR /app
 
-# Install .NET SBOM Tool
+# Create non-root user first
+RUN addgroup -g 1001 sbom && \
+    adduser -D -u 1001 -G sbom -s /bin/bash sbom
+
+# Install .NET SBOM Tool (compatible with .NET 8.0) for both root and sbom user
 RUN dotnet tool install --global Microsoft.Sbom.DotNetTool
+
+# Switch to sbom user and install the tool for sbom user as well
+USER sbom
+RUN dotnet tool install --global Microsoft.Sbom.DotNetTool
+USER root
 
 # Add .NET tools and Python venv to PATH
 ENV PATH="$PATH:/root/.dotnet/tools:/app/venv/bin"
@@ -53,11 +62,8 @@ ENV SBOM_TEMP_DIR="/app/temp"
 ENV DOTNET_CLI_TELEMETRY_OPTOUT=1
 ENV DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1
 
-# Create non-root user for security and devcontainer compatibility
-RUN addgroup -g 1001 sbom && \
-    adduser -D -u 1001 -G sbom -s /bin/bash sbom && \
-    chown -R sbom:sbom /app && \
-    # Add sbom user to sudoers for devcontainer
+# Set ownership and configure sudo
+RUN chown -R sbom:sbom /app && \
     apk add --no-cache sudo && \
     echo "sbom ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/sbom
 
@@ -66,7 +72,7 @@ USER sbom
 ENV PATH="$PATH:/home/sbom/.dotnet/tools"
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD dotnet sbom-tool --version || exit 1
+    CMD /app/entrypoint.sh --version || exit 1
 
 # Entry point
 ENTRYPOINT ["/app/entrypoint.sh"]
