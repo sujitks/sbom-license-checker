@@ -215,6 +215,25 @@ sudo chown -R sbom:sbom /workspace
 # Edit devcontainer.json: "remoteUser": "root"
 ```
 
+### SBOM Command Not Found
+If you get "sbom: command not found" or similar errors:
+
+```bash
+# Option 1: Use full path directly
+/app/entrypoint.sh --version
+/app/entrypoint.sh --type auto --path /workspace/test-projects
+
+# Option 2: Run the environment setup
+source /workspace/setup-devcontainer-env.sh
+
+# Option 3: Create alias manually
+alias sbom-scanner='/app/entrypoint.sh'
+alias sbom='/app/entrypoint.sh'
+
+# Option 4: Rebuild container
+# Command Palette: "Dev Containers: Rebuild Container"
+```
+
 ### SBOM Generation Fails
 ```bash
 # Check logs
