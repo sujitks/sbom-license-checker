@@ -26,7 +26,7 @@
         "PATH": "${PATH}:/usr/local/bin:/app:/root/.dotnet/tools"
     },
     
-    "postCreateCommand": "echo 'Setting up SBOM commands...' && ln -sf /app/entrypoint.sh /usr/local/bin/sbom-scanner && ln -sf /app/entrypoint.sh /usr/local/bin/sbom && echo 'SBOM Scanner Ready!' && sbom-scanner --version",
+    "postCreateCommand": "source /workspace/setup-devcontainer-env.sh",
     
     "workspaceFolder": "/workspace",
     "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind",

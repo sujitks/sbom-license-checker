@@ -40,20 +40,36 @@
      ```
    - Restart VS Code and try again
 
-### Issue 2: SBOM Commands Not Available
+### Issue 2: SBOM Commands Not Available or Permission Denied
+
+**Symptoms:**
+- `permission denied` for sbom-tool
+- `dotnet sbom-tool: command not found`
+- SBOM scanner fails to execute
 
 **Solutions:**
-1. **Run environment setup**:
+1. **Run the permission fix script**:
+   ```bash
+   ./fix-sbom-permissions.sh
+   ```
+
+2. **Run environment setup**:
    ```bash
    source /workspace/setup-devcontainer-env.sh
    ```
 
-2. **Use full path**:
+3. **Manual .NET tool installation**:
+   ```bash
+   dotnet tool install --global Microsoft.Sbom.DotNetTool
+   export PATH="/root/.dotnet/tools:$PATH"  # or /home/username/.dotnet/tools
+   ```
+
+4. **Use full path**:
    ```bash
    /app/entrypoint.sh --version
    ```
 
-3. **Manual alias setup**:
+5. **Manual alias setup**:
    ```bash
    alias sbom='/app/entrypoint.sh'
    echo 'alias sbom="/app/entrypoint.sh"' >> ~/.bashrc

@@ -4,6 +4,13 @@
 
 echo "🔧 Setting up SBOM Scanner environment in DevContainer..."
 
+# Ensure .NET SBOM tool is available for current user
+echo "🔧 Checking .NET SBOM tool installation..."
+if ! dotnet tool list --global | grep -q "microsoft.sbom.dottool"; then
+    echo "📦 Installing .NET SBOM tool for current user..."
+    dotnet tool install --global Microsoft.Sbom.DotNetTool --verbosity quiet || echo "⚠️  SBOM tool installation failed, will use alternative methods"
+fi
+
 # Create symlink for sbom-scanner command
 if [ ! -f "/usr/local/bin/sbom-scanner" ]; then
     if [ -w "/usr/local/bin" ] || sudo -n true 2>/dev/null; then
@@ -34,6 +41,18 @@ fi
 
 if [[ ":$PATH:" != *":/app:"* ]]; then
     export PATH="/app:$PATH"
+fi
+
+# Add .NET tools to PATH for current user
+CURRENT_USER=$(whoami)
+if [ "$CURRENT_USER" = "root" ]; then
+    DOTNET_TOOLS_PATH="/root/.dotnet/tools"
+else
+    DOTNET_TOOLS_PATH="/home/$CURRENT_USER/.dotnet/tools"
+fi
+
+if [[ ":$PATH:" != *":$DOTNET_TOOLS_PATH:"* ]] && [ -d "$DOTNET_TOOLS_PATH" ]; then
+    export PATH="$DOTNET_TOOLS_PATH:$PATH"
 fi
 
 # Verify setup
