@@ -11,7 +11,8 @@ show_help() {
     echo "🐳 DevContainer Configuration Switcher"
     echo ""
     echo "Available configurations:"
-    echo "  minimal     - Minimal config with just the Docker image (recommended)"
+    echo "  minimal     - Minimal config with sbom user (default)"
+    echo "  root        - Same as minimal but uses root user (if having user issues)"
     echo "  production  - Production config with Git/GitHub CLI features"
     echo "  dev         - Development config that builds locally"
     echo "  simple      - Simple config with base Microsoft image"
@@ -34,6 +35,9 @@ switch_config() {
     case "$config_name" in
         "minimal")
             source_file="devcontainer.minimal.json"
+            ;;
+        "root")
+            source_file="devcontainer.root.json"
             ;;
         "production")
             source_file="devcontainer.production.json"
