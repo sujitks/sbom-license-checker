@@ -63,7 +63,7 @@ RUN addgroup -g 1001 sbom && \
 
 # Set default user (can be overridden in devcontainer)
 USER sbom
-
+ENV PATH="$PATH:/home/sbom/.dotnet/tools"
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD dotnet sbom-tool --version || exit 1
