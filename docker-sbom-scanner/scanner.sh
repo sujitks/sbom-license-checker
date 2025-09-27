@@ -153,7 +153,7 @@ scan_dotnet_project() {
     local temp_sbom="$TEMP_DIR/temp-sbom"
     mkdir -p "$temp_sbom"
     
-    if dotnet sbom-tool generate \
+    if sbom-tool generate \
         -b "$project_dir" \
         -bc "$project_dir" \
         -pn "$(basename "$project_dir")" \
@@ -161,7 +161,7 @@ scan_dotnet_project() {
         -ps "github.com" \
         -nsb "https://sbom.example.org" \
         -m "$temp_sbom" \
-        --verbosity Information > "$report_dir/sbom-generation.log" 2>&1; then
+        -V Information > "$report_dir/sbom-generation.log" 2>&1; then
         
         log_success "Basic SBOM generated successfully"
         
