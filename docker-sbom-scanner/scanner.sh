@@ -17,9 +17,9 @@ NC='\033[0m' # No Color
 
 # Configuration
 SCRIPT_DIR="$(dirname "$0")"
-OUTPUT_DIR="${SBOM_OUTPUT_DIR:-/app/output}"
-TEMP_DIR="${SBOM_TEMP_DIR:-/app/temp}"
-SCAN_PATH="${1:-/workspace}"
+OUTPUT_DIR="${SBOM_OUTPUT_DIR:-$(pwd)/sbom-reports}"
+TEMP_DIR="${SBOM_TEMP_DIR:-$(pwd)/temp}"
+SCAN_PATH="${1:-$(pwd)}"
 PROJECT_TYPE="${2:-auto}"
 
 # API Configuration for license resolution
@@ -55,17 +55,17 @@ detect_project_type() {
     log "Auto-detecting project type in: $scan_path"
     
     # Check for .NET projects
-    if find "$scan_path" -name "*.csproj" -o -name "*.sln" -o -name "*.fsproj" -o -name "*.vbproj" | head -1 | grep -q .; then
+    if find "$scan_path" -name "*.csproj" -o -name "*.sln" -o -name "*.fsproj" -o -name "*.vbproj" 2>/dev/null | head -1 | grep -q .; then
         detected_types+=("dotnet")
     fi
     
     # Check for Node.js projects
-    if find "$scan_path" -name "package.json" | head -1 | grep -q .; then
+    if find "$scan_path" -name "package.json" 2>/dev/null | head -1 | grep -q .; then
         detected_types+=("nodejs")
     fi
     
     # Check for Python projects
-    if find "$scan_path" -name "requirements.txt" -o -name "setup.py" -o -name "pyproject.toml" -o -name "Pipfile" | head -1 | grep -q .; then
+    if find "$scan_path" -name "requirements.txt" -o -name "setup.py" -o -name "pyproject.toml" -o -name "Pipfile" 2>/dev/null | head -1 | grep -q .; then
         detected_types+=("python")
     fi
     
@@ -74,12 +74,12 @@ detect_project_type() {
         log "Supported files: *.csproj, *.sln, package.json, requirements.txt, setup.py, pyproject.toml, Pipfile"
         return 1
     elif [ ${#detected_types[@]} -eq 1 ]; then
-        echo "${detected_types[0]}"
+        echo "${detected_types[0]}" >&1
         return 0
     else
         log_warning "Multiple project types detected: ${detected_types[*]}"
         log "Will process all detected project types"
-        echo "multi"
+        echo "multi" >&1
         return 0
     fi
 }
@@ -108,9 +108,42 @@ resolve_license() {
         fi
     fi
     
-    # Fallback to known license patterns
+    # Comprehensive fallback license database
     case "$package_name" in
-        *microsoft*|*azure*|*aspnet*) echo "MIT" ;;
+        # Microsoft packages
+        Microsoft.*|Azure.*|System.*|AspNet*) echo "MIT" ;;
+        
+        # Popular .NET packages
+        "Npgsql") echo "PostgreSQL" ;;
+        Serilog*) echo "Apache-2.0" ;;
+        "Newtonsoft.Json") echo "MIT" ;;
+        "RestSharp") echo "Apache-2.0" ;;
+        "Bogus") echo "MIT" ;;
+        SkiaSharp*) echo "MIT" ;;
+        "Aspose.Cells") echo "Proprietary" ;;
+        AutoMapper*) echo "MIT" ;;
+        FluentValidation*) echo "Apache-2.0" ;;
+        Dapper*) echo "Apache-2.0" ;;
+        NUnit*) echo "MIT" ;;
+        xunit*) echo "Apache-2.0" ;;
+        Moq*) echo "BSD-3-Clause" ;;
+        Castle.*) echo "Apache-2.0" ;;
+        log4net*) echo "Apache-2.0" ;;
+        NLog*) echo "BSD-3-Clause" ;;
+        Polly*) echo "BSD-3-Clause" ;;
+        Swashbuckle*) echo "MIT" ;;
+        MediatR*) echo "Apache-2.0" ;;
+        StackExchange.Redis*) echo "MIT" ;;
+        RabbitMQ*) echo "MPL-2.0" ;;
+        MongoDB*) echo "Apache-2.0" ;;
+        Elastic*) echo "Apache-2.0" ;;
+        Hangfire*) echo "LGPL-3.0" ;;
+        Quartz*) echo "Apache-2.0" ;;
+        EPPlus*) echo "Polyform-Noncommercial-1.0.0" ;;
+        ClosedXML*) echo "MIT" ;;
+        CsvHelper*) echo "MS-PL" ;;
+        
+        # Generic patterns
         *apache*) echo "Apache-2.0" ;;
         *bsd*) echo "BSD-3-Clause" ;;
         *) echo "NOASSERTION" ;;
@@ -138,9 +171,21 @@ scan_dotnet_project() {
     local project_dir=$(dirname "$project_file")
     
     log "Found project file: $project_file"
+    log "Project directory: $project_dir"
+    log "Current working directory: $(pwd)"
+    
+    # Convert to absolute path first
+    local abs_project_dir
+    if [[ "$project_dir" = /* ]]; then
+        abs_project_dir="$project_dir"
+    else
+        abs_project_dir="$(pwd)/$project_dir"
+    fi
+    
+    log "Absolute project directory: $abs_project_dir"
     log "Restoring NuGet packages..."
     
-    cd "$project_dir"
+    cd "$abs_project_dir"
     
     # Restore packages
     if ! dotnet restore --verbosity quiet; then
@@ -153,14 +198,17 @@ scan_dotnet_project() {
     local temp_sbom="$TEMP_DIR/temp-sbom"
     mkdir -p "$temp_sbom"
     
+    # Use absolute paths for SBOM tool (already set above)
+    local abs_temp_sbom=$(mkdir -p "$temp_sbom" && cd "$temp_sbom" && pwd)
+    
     if sbom-tool generate \
-        -b "$project_dir" \
-        -bc "$project_dir" \
+        -b "$abs_project_dir" \
+        -bc "$abs_project_dir" \
         -pn "$(basename "$project_dir")" \
         -pv "1.0.0" \
         -ps "github.com" \
         -nsb "https://sbom.example.org" \
-        -m "$temp_sbom" \
+        -m "$abs_temp_sbom" \
         -V Information > "$report_dir/sbom-generation.log" 2>&1; then
         
         log_success "Basic SBOM generated successfully"
@@ -175,17 +223,46 @@ scan_dotnet_project() {
             local enhanced_sbom="$TEMP_DIR/enhanced-sbom.json"
             local license_mapping="$report_dir/license-mapping.json"
             
-            # Create enhanced SBOM with license resolution
+            # Create enhanced SBOM with comprehensive license resolution
             jq --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '
                 .creationInfo.created = $timestamp |
                 .packages[] |= (
                     if .name then
                         .licenseConcluded = (
                             if .licenseConcluded == "NOASSERTION" or .licenseConcluded == null then
-                                # Enhanced license resolution logic would go here
-                                if (.name | test("Microsoft|Azure|AspNet"; "i")) then "MIT"
-                                elif (.name | test("Apache"; "i")) then "Apache-2.0"  
-                                elif (.name | test("BSD"; "i")) then "BSD-3-Clause"
+                                # Comprehensive license database for popular .NET packages
+                                if (.name | test("^Microsoft\\.|^Azure\\.|^AspNet"; "i")) then "MIT"
+                                elif (.name | test("^System\\.")) then "MIT"
+                                elif (.name == "Npgsql") then "PostgreSQL"
+                                elif (.name | test("^Serilog")) then "Apache-2.0"
+                                elif (.name == "Newtonsoft.Json") then "MIT"
+                                elif (.name == "RestSharp") then "Apache-2.0"
+                                elif (.name == "Bogus") then "MIT"
+                                elif (.name | test("^SkiaSharp")) then "MIT"
+                                elif (.name == "Aspose.Cells") then "Proprietary"
+                                elif (.name | test("^AutoMapper")) then "MIT"
+                                elif (.name | test("^FluentValidation")) then "Apache-2.0"
+                                elif (.name | test("^Dapper")) then "Apache-2.0"
+                                elif (.name | test("^NUnit")) then "MIT"
+                                elif (.name | test("^xunit")) then "Apache-2.0"
+                                elif (.name | test("^Moq")) then "BSD-3-Clause"
+                                elif (.name | test("^Castle\\.")) then "Apache-2.0"
+                                elif (.name | test("^log4net")) then "Apache-2.0"
+                                elif (.name | test("^NLog")) then "BSD-3-Clause"
+                                elif (.name | test("^Polly")) then "BSD-3-Clause"
+                                elif (.name | test("^Swashbuckle")) then "MIT"
+                                elif (.name | test("^MediatR")) then "Apache-2.0"
+                                elif (.name | test("^StackExchange\\.Redis")) then "MIT"
+                                elif (.name | test("^RabbitMQ")) then "MPL-2.0"
+                                elif (.name | test("^MongoDB")) then "Apache-2.0"
+                                elif (.name | test("^Elastic")) then "Apache-2.0"
+                                elif (.name | test("^Hangfire")) then "LGPL-3.0"
+                                elif (.name | test("^Quartz")) then "Apache-2.0"
+                                elif (.name | test("^EPPlus")) then "Polyform-Noncommercial-1.0.0"
+                                elif (.name | test("^ClosedXML")) then "MIT"
+                                elif (.name | test("^CsvHelper")) then "MS-PL"
+                                elif (.name | test("^Apache"; "i")) then "Apache-2.0"  
+                                elif (.name | test("^BSD"; "i")) then "BSD-3-Clause"
                                 else "NOASSERTION"
                                 end
                             else .licenseConcluded
@@ -489,7 +566,8 @@ main_scan() {
     
     # Auto-detect project type if needed
     if [ "$project_type" = "auto" ]; then
-        project_type=$(detect_project_type "$scan_path")
+        detected=$(detect_project_type "$scan_path" 2>&1)
+        project_type=$(echo "$detected" | tail -1)
         log "Detected project type: $project_type"
     fi
     
