@@ -459,19 +459,40 @@ scan_python_project() {
     local project_dir=$(dirname "$req_file")
     cd "$project_dir"
     
-    # Install packages if requirements.txt exists
-    if [ -f "requirements.txt" ]; then
-        log "Installing Python packages from requirements.txt..."
-        if ! pip3 install -r requirements.txt --quiet --user; then
-            log_warning "Some packages may have failed to install, continuing with analysis..."
+    # Create and activate virtual environment for package installation
+    local venv_dir="$TEMP_DIR/python-venv"
+    log "Creating Python virtual environment..."
+    
+    if python3 -m venv "$venv_dir" 2>/dev/null; then
+        log_success "Virtual environment created"
+        
+        # Activate virtual environment and install packages
+        if [ -f "requirements.txt" ]; then
+            log "Installing Python packages from requirements.txt..."
+            if source "$venv_dir/bin/activate" && pip install -r requirements.txt --quiet && pip install pip-licenses --quiet; then
+                log_success "Packages installed in virtual environment"
+            else
+                log_warning "Some packages may have failed to install, continuing with analysis..."
+            fi
         fi
+    else
+        log_warning "Failed to create virtual environment, trying system-wide analysis..."
     fi
     
     # Generate license report using pip-licenses
     log "Analyzing licenses with pip-licenses..."
     local license_file="$report_dir/python-licenses.json"
     
-    if pip-licenses --format=json --output-file="$license_file" 2>/dev/null; then
+    # Try to use virtual environment pip-licenses first, then fall back to system
+    local pip_licenses_cmd="pip-licenses"
+    if [ -f "$venv_dir/bin/pip-licenses" ]; then
+        source "$venv_dir/bin/activate"
+        pip_licenses_cmd="$venv_dir/bin/pip-licenses"
+    elif [ -f "$venv_dir/bin/activate" ]; then
+        source "$venv_dir/bin/activate"
+    fi
+    
+    if $pip_licenses_cmd --format=json --output-file="$license_file" 2>/dev/null; then
         log_success "License analysis completed"
         
         # Generate SPDX SBOM
