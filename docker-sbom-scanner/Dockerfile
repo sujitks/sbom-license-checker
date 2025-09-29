@@ -25,16 +25,24 @@ WORKDIR /app
 RUN addgroup -g 1001 sbom && \
     adduser -D -u 1001 -G sbom -s /bin/bash sbom
 
-# Install .NET SBOM Tool (compatible with .NET 8.0) for both root and sbom user
+# Install .NET SBOM Tool globally for root user
 RUN dotnet tool install --global Microsoft.Sbom.DotNetTool
+
+# Add dotnet tools to system PATH (for all users)
+ENV PATH="$PATH:/root/.dotnet/tools"
 
 # Switch to sbom user and install the tool for sbom user as well
 USER sbom
 RUN dotnet tool install --global Microsoft.Sbom.DotNetTool
+
+# Add dotnet tools to sbom user PATH
+ENV PATH="$PATH:/home/sbom/.dotnet/tools"
+
+# Switch back to root for remaining setup
 USER root
 
 # Add .NET tools and Python venv to PATH
-ENV PATH="$PATH:/root/.dotnet/tools:/app/venv/bin"
+ENV PATH="$PATH:/root/.dotnet/tools:/home/sbom/.dotnet/tools:/app/venv/bin"
 
 # Install Python packages for license detection using virtual environment
 RUN python3 -m venv /app/venv && \
@@ -70,7 +78,9 @@ RUN chown -R sbom:sbom /app && \
 
 # Set default user (can be overridden in devcontainer)
 USER sbom
-ENV PATH="$PATH:/home/sbom/.dotnet/tools"
+
+# Ensure PATH includes all necessary directories for sbom user
+ENV PATH="$PATH:/home/sbom/.dotnet/tools:/root/.dotnet/tools:/app/venv/bin"
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD /app/entrypoint.sh --version || exit 1

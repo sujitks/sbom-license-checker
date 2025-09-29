@@ -177,6 +177,7 @@ validate_args() {
     
     # Export for scanner script
     export SBOM_OUTPUT_DIR="$OUTPUT_PATH"
+    export SBOM_TEMP_DIR="/app/temp"
     export SBOM_SCAN_PATH="$SCAN_PATH"
     export SBOM_PROJECT_TYPE="$PROJECT_TYPE"
     export SBOM_VERBOSE="$VERBOSE"
@@ -215,11 +216,17 @@ health_check() {
         health_status=1
     fi
     
-    # Check SBOM Tool
-    if dotnet sbom-tool --version >/dev/null 2>&1; then
-        echo -e "${GREEN}✓ SBOM Tool available${NC}"
+    # Check SBOM Tool (try multiple approaches)
+    if command -v sbom-tool >/dev/null 2>&1; then
+        echo -e "${GREEN}✓ SBOM Tool available via command${NC}"
+    elif /home/sbom/.dotnet/tools/sbom-tool --version >/dev/null 2>&1; then
+        echo -e "${GREEN}✓ SBOM Tool available in sbom user path${NC}"
+    elif /root/.dotnet/tools/sbom-tool --version >/dev/null 2>&1; then
+        echo -e "${GREEN}✓ SBOM Tool available in root path${NC}"
     else
         echo -e "${RED}✗ SBOM Tool not available${NC}"
+        echo -e "${YELLOW}Attempting to locate dotnet tools...${NC}"
+        find /home /root -name "sbom-tool" 2>/dev/null | head -5
         health_status=1
     fi
     
@@ -258,15 +265,24 @@ health_check() {
 # Signal handlers
 cleanup() {
     echo -e "${YELLOW}Cleaning up temporary files...${NC}"
-    rm -rf /app/temp/* 2>/dev/null || true
+    # Only cleanup if scanner completed or failed, don't cleanup during processing
+    if [ "${SCANNER_RUNNING}" != "true" ]; then
+        rm -rf /app/temp/* 2>/dev/null || true
+    fi
 }
 
-# Set up signal traps
-trap cleanup EXIT
-trap 'echo -e "${RED}Interrupted by user${NC}"; exit 130' INT TERM
+# Set up signal traps  
+trap 'export SCANNER_RUNNING="false"; cleanup' EXIT
+trap 'echo -e "${RED}Interrupted by user${NC}"; export SCANNER_RUNNING="false"; cleanup; exit 130' INT TERM
 
 # Main entry point
 main() {
+    # If first argument is /bin/bash or sh, execute it directly
+    if [ "$1" = "/bin/bash" ] || [ "$1" = "/bin/sh" ] || [ "$1" = "bash" ] || [ "$1" = "sh" ]; then
+        exec "$@"
+        return
+    fi
+    
     # Parse arguments
     parse_args "$@"
     
@@ -279,8 +295,11 @@ main() {
     # Validate arguments
     validate_args
     
-    # Setup logging
+    # Setup environment
     setup_logging
+    
+    # Ensure dotnet tools are in PATH
+    export PATH="$PATH:/home/sbom/.dotnet/tools:/root/.dotnet/tools:/app/venv/bin"
     
     # Perform health check
     health_check
@@ -291,8 +310,12 @@ main() {
     # Run the scanner
     echo -e "${BLUE}Starting SBOM scanner...${NC}"
     
+    # Mark scanner as running
+    export SCANNER_RUNNING="true"
+    
     # Execute scanner with timeout
     if timeout "$SCAN_TIMEOUT" /app/scanner.sh "$SCAN_PATH" "$PROJECT_TYPE"; then
+        export SCANNER_RUNNING="false"
         echo -e "${GREEN}✅ SBOM scan completed successfully!${NC}"
         
         # Display output summary
@@ -302,14 +325,18 @@ main() {
             echo -e "  ${YELLOW}$(basename "$file")${NC} ($size bytes)"
         done
         
+        # Now cleanup temp files
+        cleanup
         exit 0
     else
         local exit_code=$?
+        export SCANNER_RUNNING="false"
         if [ $exit_code -eq 124 ]; then
             echo -e "${RED}❌ Scanner timed out after $SCAN_TIMEOUT seconds${NC}"
         else
             echo -e "${RED}❌ Scanner failed with exit code $exit_code${NC}"
         fi
+        cleanup
         exit $exit_code
     fi
 }

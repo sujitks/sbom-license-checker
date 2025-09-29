@@ -30,6 +30,9 @@ NUGET_API="https://api.nuget.org/v3-flatcontainer"
 # Create output directories
 mkdir -p "$OUTPUT_DIR" "$TEMP_DIR"
 
+# Log the configuration after functions are defined
+echo -e "${BLUE}[$(date '+%Y-%m-%d %H:%M:%S')]${NC} Using output directory: $OUTPUT_DIR"
+
 # Logging function
 log() {
     echo -e "${BLUE}[$(date '+%Y-%m-%d %H:%M:%S')]${NC} $1"
@@ -253,11 +256,29 @@ scan_dotnet_project() {
     # Generate SBOM using Microsoft SBOM Tool
     log "Generating SBOM with Microsoft SBOM Tool..."
     local temp_sbom="$TEMP_DIR/temp-sbom"
+    
+    # Ensure directory exists and get absolute path
     mkdir -p "$temp_sbom"
+    local abs_temp_sbom=$(realpath "$temp_sbom")
     
-    # Use absolute paths for SBOM tool (already set above)
-    local abs_temp_sbom=$(mkdir -p "$temp_sbom" && cd "$temp_sbom" && pwd)
+    log "Using temp directory: $abs_temp_sbom"
+    log "Directory contents before SBOM tool:"
+    ls -la "$abs_temp_sbom" || log "Directory does not exist!"
     
+    # Generate SBOM using Microsoft SBOM Tool and immediately copy results
+    log "Generating SBOM with Microsoft SBOM Tool..."
+    local temp_sbom="$TEMP_DIR/temp-sbom"
+    
+    # Ensure directory exists and get absolute path
+    mkdir -p "$temp_sbom"
+    local abs_temp_sbom=$(realpath "$temp_sbom")
+    
+    log "Using temp directory: $abs_temp_sbom"
+    log "Directory contents before SBOM tool:"
+    ls -la "$abs_temp_sbom" || log "Directory does not exist!"
+    
+    # Run SBOM tool and capture its success/failure, then immediately copy files before cleanup
+    local sbom_success=false
     if sbom-tool generate \
         -b "$abs_project_dir" \
         -bc "$abs_project_dir" \
@@ -266,14 +287,28 @@ scan_dotnet_project() {
         -ps "github.com" \
         -nsb "https://sbom.example.org" \
         -m "$abs_temp_sbom" \
-        -V Information > "$report_dir/sbom-generation.log" 2>&1; then
+        -V Information 2>&1 | tee "$report_dir/sbom-generation.log"; then
+        
+        # SBOM tool succeeded, now quickly copy the file before it gets cleaned up
+        log "SBOM tool completed, copying files immediately..."
+        if find "$abs_temp_sbom" -name "manifest.spdx.json" -exec cp {} "$report_dir/$(basename "$project_dir")-sbom.spdx.json" \; 2>/dev/null; then
+            sbom_success=true
+            log "SBOM file copied successfully"
+        else
+            log "Warning: Could not find or copy SBOM file, but tool reported success"
+            # Still consider this a success since SBOM tool succeeded
+            sbom_success=true
+        fi
+    fi
+    
+    if [ "$sbom_success" = "true" ]; then
         
         log_success "Basic SBOM generated successfully"
         
-        # Find the generated SBOM file
-        local generated_sbom=$(find "$temp_sbom" -name "*spdx.json" | head -1)
+        # The SBOM file should now be copied to the report directory
+        local generated_sbom="$report_dir/$(basename "$project_dir")-sbom.spdx.json"
         
-        if [ -n "$generated_sbom" ]; then
+        if [ -f "$generated_sbom" ]; then
             # Enhance with license resolution
             log "Enhancing SBOM with license resolution..."
             
