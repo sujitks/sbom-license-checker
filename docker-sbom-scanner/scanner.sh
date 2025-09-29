@@ -479,7 +479,15 @@ Success Rate: $success_rate%
 Generated Files:
 - SBOM: nodejs-sbom.spdx.json
 - License Data: npm-licenses.json
+- License Summary: license-summary.txt
 EOF
+
+        # Generate license summary (matching .NET format)
+        echo "Node.js License Summary" > "$report_dir/license-summary.txt"
+        echo "======================" >> "$report_dir/license-summary.txt"
+        echo "Generated: $(date)" >> "$report_dir/license-summary.txt"
+        echo "" >> "$report_dir/license-summary.txt"
+        jq -r 'to_entries[] | (.key + ": " + (.value.licenses // "NOASSERTION"))' "$license_file" | sort >> "$report_dir/license-summary.txt"
         
         log_success "Node.js SBOM completed (Success Rate: $success_rate%)"
         return 0
@@ -617,7 +625,15 @@ Success Rate: $success_rate%
 Generated Files:
 - SBOM: python-sbom.spdx.json
 - License Data: python-licenses.json
+- License Summary: license-summary.txt
 EOF
+
+        # Generate license summary (matching .NET format)
+        echo "Python License Summary" > "$report_dir/license-summary.txt"
+        echo "======================" >> "$report_dir/license-summary.txt"
+        echo "Generated: $(date)" >> "$report_dir/license-summary.txt"
+        echo "" >> "$report_dir/license-summary.txt"
+        jq -r '.[] | (.Name + ": " + (.License // "NOASSERTION"))' "$license_file" | sort >> "$report_dir/license-summary.txt"
         
         log_success "Python SBOM completed (Success Rate: $success_rate%)"
         return 0
