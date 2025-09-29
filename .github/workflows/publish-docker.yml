@@ -1,0 +1,72 @@
+name: Build and Publish SBOM Scanner
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Log in to Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Extract metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+        tags: |
+          type=ref,event=branch
+          type=raw,value=latest,enable={{is_default_branch}}
+          type=sha,prefix={{branch}}-
+
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: ./docker-sbom-scanner
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+
+    - name: Test Docker image
+      run: |
+        echo "Testing the built image..."
+        docker run --rm ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest --version
+        echo "✅ Docker image test completed"
+
+    - name: Image information
+      run: |
+        echo "## 🐳 Docker Image Published" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Registry:** ${{ env.REGISTRY }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Image:** \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest\`" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### Usage in Azure DevOps:" >> $GITHUB_STEP_SUMMARY
+        echo "\`\`\`yaml" >> $GITHUB_STEP_SUMMARY
+        echo "- task: Docker@2" >> $GITHUB_STEP_SUMMARY
+        echo "  inputs:" >> $GITHUB_STEP_SUMMARY
+        echo "    command: 'run'" >> $GITHUB_STEP_SUMMARY
+        echo "    arguments: |" >> $GITHUB_STEP_SUMMARY
+        echo "      --rm \\" >> $GITHUB_STEP_SUMMARY
+        echo "      -v \$(Build.SourcesDirectory):/workspace \\" >> $GITHUB_STEP_SUMMARY
+        echo "      -v \$(Build.ArtifactStagingDirectory)/reports:/output \\" >> $GITHUB_STEP_SUMMARY
+        echo "      ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest \\" >> $GITHUB_STEP_SUMMARY
+        echo "      --type dotnet --output /output" >> $GITHUB_STEP_SUMMARY
+        echo "\`\`\`" >> $GITHUB_STEP_SUMMARY

@@ -1,0 +1,167 @@
+# Basic SBOM License Scanning Pipeline
+# Scans repository and publishes HTML license report
+
+trigger:
+- main
+- develop
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  dockerImage: 'ghcr.io/sujitks/sbom-license-checker:latest'
+  projectType: 'auto'  # Change to 'dotnet', 'nodejs', or 'python' for specific projects
+
+stages:
+- stage: SBOM_Scan
+  displayName: 'SBOM License Analysis'
+  jobs:
+  - job: ScanLicenses
+    displayName: 'Scan Project Licenses'
+    steps:
+    
+    - checkout: self
+      displayName: 'Checkout Source Code'
+    
+    - task: Docker@2
+      displayName: 'Run SBOM Scanner'
+      inputs:
+        command: 'run'
+        arguments: |
+          --rm \
+          -v $(Build.SourcesDirectory):/workspace \
+          -v $(Build.ArtifactStagingDirectory)/sbom-reports:/output \
+          $(dockerImage) \
+          --type $(projectType) \
+          --path /workspace \
+          --output /output \
+          --verbose
+    
+    - task: PowerShell@2
+      displayName: 'Generate HTML Report'
+      inputs:
+        targetType: 'inline'
+        script: |
+          # Create HTML report from license summary
+          $reportsDir = "$(Build.ArtifactStagingDirectory)/sbom-reports"
+          $htmlReport = "$reportsDir/license-report.html"
+          
+          # Start HTML document
+          $html = @"
+          <!DOCTYPE html>
+          <html>
+          <head>
+              <title>SBOM License Report - $(Build.Repository.Name)</title>
+              <style>
+                  body { font-family: Arial, sans-serif; margin: 40px; }
+                  .header { background: #0078d4; color: white; padding: 20px; border-radius: 5px; }
+                  .summary { background: #f8f9fa; padding: 15px; margin: 20px 0; border-radius: 5px; }
+                  .license-table { width: 100%; border-collapse: collapse; margin: 20px 0; }
+                  .license-table th, .license-table td { border: 1px solid #ddd; padding: 12px; text-align: left; }
+                  .license-table th { background-color: #f2f2f2; }
+                  .license-table tr:nth-child(even) { background-color: #f9f9f9; }
+                  .footer { margin-top: 40px; color: #666; font-size: 12px; }
+                  .badge { padding: 4px 8px; border-radius: 3px; color: white; font-size: 11px; }
+                  .mit { background: #28a745; }
+                  .apache { background: #fd7e14; }
+                  .bsd { background: #6610f2; }
+                  .unknown { background: #dc3545; }
+              </style>
+          </head>
+          <body>
+              <div class="header">
+                  <h1>SBOM License Report</h1>
+                  <p>Repository: $(Build.Repository.Name) | Branch: $(Build.SourceBranchName) | Build: $(Build.BuildNumber)</p>
+                  <p>Generated: $(Get-Date -Format "yyyy-MM-dd HH:mm:ss UTC")</p>
+              </div>
+          "@
+          
+          # Add summary if available
+          $summaryFiles = Get-ChildItem "$reportsDir" -Recurse -Name "scan-summary.txt"
+          foreach ($summaryFile in $summaryFiles) {
+              $summaryContent = Get-Content "$reportsDir/$summaryFile" -Raw
+              $html += @"
+              <div class="summary">
+                  <h2>Scan Summary</h2>
+                  <pre>$summaryContent</pre>
+              </div>
+          "@
+          }
+          
+          # Add license details
+          $html += @"
+              <h2>License Details</h2>
+              <table class="license-table">
+                  <thead>
+                      <tr>
+                          <th>Package</th>
+                          <th>Version</th>
+                          <th>License</th>
+                          <th>Type</th>
+                      </tr>
+                  </thead>
+                  <tbody>
+          "@
+          
+          # Process license summary files
+          $licenseFiles = Get-ChildItem "$reportsDir" -Recurse -Name "license-summary.txt"
+          foreach ($licenseFile in $licenseFiles) {
+              $licenseContent = Get-Content "$reportsDir/$licenseFile"
+              foreach ($line in $licenseContent) {
+                  if ($line -match "^(.+?):\s*(.+)$") {
+                      $package = $matches[1].Trim()
+                      $license = $matches[2].Trim()
+                      
+                      # Extract version if available (package@version format)
+                      $version = "N/A"
+                      if ($package -match "^(.+?)@(.+)$") {
+                          $package = $matches[1]
+                          $version = $matches[2]
+                      }
+                      
+                      # Determine license badge class
+                      $badgeClass = "unknown"
+                      if ($license -match "MIT") { $badgeClass = "mit" }
+                      elseif ($license -match "Apache") { $badgeClass = "apache" }
+                      elseif ($license -match "BSD") { $badgeClass = "bsd" }
+                      
+                      $projectType = Split-Path (Split-Path $licenseFile) -Leaf
+                      
+                      $html += @"
+                          <tr>
+                              <td>$package</td>
+                              <td>$version</td>
+                              <td><span class="badge $badgeClass">$license</span></td>
+                              <td>$projectType</td>
+                          </tr>
+          "@
+                  }
+              }
+          }
+          
+          # Close HTML
+          $html += @"
+                  </tbody>
+              </table>
+              <div class="footer">
+                  <p>Generated by SBOM License Scanner | Build $(Build.BuildNumber) | $(Get-Date -Format "yyyy-MM-dd HH:mm:ss UTC")</p>
+              </div>
+          </body>
+          </html>
+          "@
+          
+          # Write HTML file
+          $html | Out-File -FilePath $htmlReport -Encoding UTF8
+          Write-Host "HTML report generated: $htmlReport"
+    
+    - task: PublishBuildArtifacts@1
+      displayName: 'Publish SBOM Reports'
+      inputs:
+        pathToPublish: '$(Build.ArtifactStagingDirectory)/sbom-reports'
+        artifactName: 'sbom-license-reports'
+    
+    - task: PublishHtmlReport@1
+      displayName: 'Publish HTML License Report'
+      inputs:
+        reportDir: '$(Build.ArtifactStagingDirectory)/sbom-reports'
+        tabName: 'License Report'

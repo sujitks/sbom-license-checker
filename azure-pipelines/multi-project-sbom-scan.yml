@@ -1,0 +1,236 @@
+# Multi-Project SBOM Scanning Pipeline
+# Scans .NET, Node.js, and Python projects separately and creates consolidated report
+
+trigger:
+- main
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  dockerImage: 'ghcr.io/sujitks/sbom-license-checker:latest'
+
+stages:
+- stage: Multi_Project_SBOM
+  displayName: 'Multi-Language SBOM Scanning'
+  jobs:
+  - job: ScanAllProjects
+    displayName: 'Scan All Project Types'
+    strategy:
+      matrix:
+        DotNet:
+          projectType: 'dotnet'
+          displayName: '.NET Projects'
+        NodeJS:
+          projectType: 'nodejs'
+          displayName: 'Node.js Projects'
+        Python:
+          projectType: 'python'
+          displayName: 'Python Projects'
+    steps:
+    
+    - checkout: self
+      displayName: 'Checkout Source Code'
+    
+    - task: Docker@2
+      displayName: 'Scan $(displayName)'
+      inputs:
+        command: 'run'
+        arguments: |
+          --rm \
+          -v $(Build.SourcesDirectory):/workspace \
+          -v $(Build.ArtifactStagingDirectory)/$(projectType)-reports:/output \
+          $(dockerImage) \
+          --type $(projectType) \
+          --path /workspace \
+          --output /output
+      continueOnError: true
+    
+    - task: PublishBuildArtifacts@1
+      displayName: 'Publish $(displayName) Reports'
+      inputs:
+        pathToPublish: '$(Build.ArtifactStagingDirectory)/$(projectType)-reports'
+        artifactName: '$(projectType)-sbom-reports'
+      condition: succeededOrFailed()
+
+  - job: ConsolidateReports
+    displayName: 'Create Consolidated HTML Report'
+    dependsOn: ScanAllProjects
+    condition: succeededOrFailed()
+    steps:
+    
+    - download: current
+      displayName: 'Download All Scan Reports'
+    
+    - task: PowerShell@2
+      displayName: 'Generate Consolidated HTML Report'
+      inputs:
+        targetType: 'inline'
+        script: |
+          # Create consolidated HTML report from all project types
+          $allReports = @()
+          $totalPackages = 0
+          $projectStats = @{}
+          
+          # Process each project type
+          $projectTypes = @('dotnet', 'nodejs', 'python')
+          foreach ($projectType in $projectTypes) {
+              $reportPath = "$(Pipeline.Workspace)/$projectType-sbom-reports"
+              if (Test-Path $reportPath) {
+                  $licenseFile = Get-ChildItem "$reportPath" -Recurse -Name "license-summary.txt" | Select-Object -First 1
+                  if ($licenseFile) {
+                      $licenseContent = Get-Content "$reportPath/$licenseFile"
+                      $projectPackages = 0
+                      foreach ($line in $licenseContent) {
+                          if ($line -match "^(.+?):\s*(.+)$") {
+                              $package = $matches[1].Trim()
+                              $license = $matches[2].Trim()
+                              $allReports += @{
+                                  Package = $package
+                                  License = $license
+                                  ProjectType = $projectType.ToUpper()
+                              }
+                              $projectPackages++
+                              $totalPackages++
+                          }
+                      }
+                      $projectStats[$projectType] = $projectPackages
+                  }
+              }
+          }
+          
+          # Generate consolidated HTML
+          $html = @"
+          <!DOCTYPE html>
+          <html>
+          <head>
+              <title>Consolidated SBOM License Report - $(Build.Repository.Name)</title>
+              <style>
+                  body { font-family: 'Segoe UI', sans-serif; margin: 40px; background: #f8f9fa; }
+                  .container { background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 20px rgba(0,0,0,0.1); }
+                  .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; margin: -30px -30px 30px -30px; border-radius: 10px 10px 0 0; }
+                  .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin: 30px 0; }
+                  .stat-card { background: #f8f9fa; padding: 20px; border-radius: 8px; text-align: center; border-left: 4px solid #667eea; }
+                  .stat-number { font-size: 32px; font-weight: bold; color: #667eea; }
+                  .stat-label { color: #6c757d; margin-top: 5px; }
+                  .project-tabs { display: flex; margin: 30px 0 0 0; border-bottom: 2px solid #dee2e6; }
+                  .tab { padding: 12px 24px; cursor: pointer; border-bottom: 3px solid transparent; }
+                  .tab.active { border-bottom-color: #667eea; background: #f8f9fa; }
+                  .table-container { max-height: 600px; overflow-y: auto; }
+                  .license-table { width: 100%; border-collapse: collapse; margin: 20px 0; }
+                  .license-table th, .license-table td { border: 1px solid #dee2e6; padding: 12px; text-align: left; }
+                  .license-table th { background: #f8f9fa; position: sticky; top: 0; }
+                  .license-table tr:hover { background: #f8f9fa; }
+                  .badge { padding: 6px 12px; border-radius: 20px; color: white; font-size: 11px; font-weight: 500; }
+                  .dotnet { background: #512bd4; }
+                  .nodejs { background: #68a063; }
+                  .python { background: #3776ab; }
+                  .filter-controls { margin: 20px 0; }
+                  .filter-input { padding: 8px 12px; border: 1px solid #ced4da; border-radius: 4px; width: 300px; }
+              </style>
+              <script>
+                  function filterTable() {
+                      const input = document.getElementById('packageFilter');
+                      const filter = input.value.toLowerCase();
+                      const table = document.getElementById('licenseTable');
+                      const rows = table.getElementsByTagName('tr');
+                      
+                      for (let i = 1; i < rows.length; i++) {
+                          const packageCell = rows[i].getElementsByTagName('td')[0];
+                          const licenseCell = rows[i].getElementsByTagName('td')[1];
+                          const typeCell = rows[i].getElementsByTagName('td')[2];
+                          
+                          if (packageCell && licenseCell && typeCell) {
+                              const packageText = packageCell.textContent.toLowerCase();
+                              const licenseText = licenseCell.textContent.toLowerCase();
+                              const typeText = typeCell.textContent.toLowerCase();
+                              
+                              if (packageText.includes(filter) || licenseText.includes(filter) || typeText.includes(filter)) {
+                                  rows[i].style.display = '';
+                              } else {
+                                  rows[i].style.display = 'none';
+                              }
+                          }
+                      }
+                  }
+              </script>
+          </head>
+          <body>
+              <div class="container">
+                  <div class="header">
+                      <h1>🌐 Consolidated SBOM License Report</h1>
+                      <p><strong>Repository:</strong> $(Build.Repository.Name) | <strong>Build:</strong> $(Build.BuildNumber)</p>
+                      <p><strong>Generated:</strong> $(Get-Date -Format "yyyy-MM-dd HH:mm:ss UTC") | <strong>Total Packages:</strong> $totalPackages</p>
+                  </div>
+                  
+                  <div class="stats-grid">
+                      <div class="stat-card">
+                          <div class="stat-number">$totalPackages</div>
+                          <div class="stat-label">Total Packages</div>
+                      </div>
+          "@
+          
+          foreach ($projectType in $projectTypes) {
+              $count = if ($projectStats[$projectType]) { $projectStats[$projectType] } else { 0 }
+              $html += @"
+                      <div class="stat-card">
+                          <div class="stat-number">$count</div>
+                          <div class="stat-label">$($projectType.ToUpper()) Packages</div>
+                      </div>
+          "@
+          }
+          
+          $html += @"
+                  </div>
+                  
+                  <div class="filter-controls">
+                      <input type="text" id="packageFilter" class="filter-input" placeholder="Filter packages, licenses, or project types..." onkeyup="filterTable()">
+                  </div>
+                  
+                  <div class="table-container">
+                      <table class="license-table" id="licenseTable">
+                          <thead>
+                              <tr>
+                                  <th>Package</th>
+                                  <th>License</th>
+                                  <th>Project Type</th>
+                              </tr>
+                          </thead>
+                          <tbody>
+          "@
+          
+          # Add all packages to table
+          foreach ($report in $allReports | Sort-Object Package) {
+              $badgeClass = $report.ProjectType.ToLower()
+              $html += @"
+                          <tr>
+                              <td>$($report.Package)</td>
+                              <td>$($report.License)</td>
+                              <td><span class="badge $badgeClass">$($report.ProjectType)</span></td>
+                          </tr>
+          "@
+          }
+          
+          $html += @"
+                          </tbody>
+                      </table>
+                  </div>
+                  
+                  <div style="margin-top: 40px; color: #6c757d; font-size: 14px;">
+                      <p>Generated by SBOM License Scanner | Build $(Build.BuildNumber) | $(Get-Date -Format "yyyy-MM-dd HH:mm:ss UTC")</p>
+                  </div>
+              </div>
+          </body>
+          </html>
+          "@
+          
+          # Write consolidated report
+          New-Item -ItemType Directory -Force -Path "$(Build.ArtifactStagingDirectory)/consolidated-reports"
+          $html | Out-File -FilePath "$(Build.ArtifactStagingDirectory)/consolidated-reports/consolidated-license-report.html" -Encoding UTF8
+          Write-Host "Consolidated HTML report generated with $totalPackages packages"
+    
+    - task: PublishBuildArtifacts@1
+      displayName: 'Publish Consolidated Report'
+      inputs:
+        pathToPublish: '$(Build.ArtifactStagingDirectory)/consolidated-reports'
+        artifactName: 'consolidated-sbom-report'

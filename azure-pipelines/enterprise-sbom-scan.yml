@@ -1,0 +1,362 @@
+# Enterprise SBOM License Scanning Pipeline
+# Advanced features: compliance checking, notifications, multi-stage approval
+
+trigger:
+- main
+- release/*
+
+pr:
+- main
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  dockerImage: 'ghcr.io/sujitks/sbom-license-checker:latest'
+  projectType: 'auto'
+  # License compliance settings
+  allowedLicenses: 'MIT,Apache-2.0,BSD-3-Clause,BSD-2-Clause,ISC'
+  blockedLicenses: 'GPL-3.0,AGPL-3.0,SSPL-1.0'
+  complianceThreshold: 95
+
+stages:
+- stage: SBOM_Analysis
+  displayName: 'SBOM License Analysis'
+  jobs:
+  - job: ScanLicenses
+    displayName: 'Comprehensive License Scan'
+    timeoutInMinutes: 30
+    steps:
+    
+    - checkout: self
+      displayName: 'Checkout Source Code'
+    
+    - task: Docker@2
+      displayName: 'Pull SBOM Scanner Image'
+      inputs:
+        command: 'pull'
+        arguments: '$(dockerImage)'
+    
+    - task: Docker@2
+      displayName: 'Run SBOM License Scanner'
+      inputs:
+        command: 'run'
+        arguments: |
+          --rm \
+          --name sbom-scanner-$(Build.BuildId) \
+          -e SCAN_TIMEOUT=1800 \
+          -e GITHUB_TOKEN=$(GITHUB_TOKEN) \
+          -v $(Build.SourcesDirectory):/workspace \
+          -v $(Build.ArtifactStagingDirectory)/sbom-reports:/output \
+          $(dockerImage) \
+          --type $(projectType) \
+          --path /workspace \
+          --output /output \
+          --verbose
+    
+    - task: PowerShell@2
+      displayName: 'Generate Enterprise HTML Report'
+      inputs:
+        targetType: 'inline'
+        script: |
+          # Enhanced HTML report generation with compliance checks
+          $reportsDir = "$(Build.ArtifactStagingDirectory)/sbom-reports"
+          $htmlReport = "$reportsDir/enterprise-license-report.html"
+          $complianceReport = "$reportsDir/compliance-summary.json"
+          
+          # Initialize compliance tracking
+          $totalPackages = 0
+          $compliantPackages = 0
+          $blockedPackages = @()
+          $unknownLicenses = @()
+          $allowedLicensesList = "$(allowedLicenses)" -split ","
+          $blockedLicensesList = "$(blockedLicenses)" -split ","
+          
+          # Enhanced HTML with enterprise styling
+          $html = @"
+          <!DOCTYPE html>
+          <html>
+          <head>
+              <title>Enterprise SBOM License Report - $(Build.Repository.Name)</title>
+              <meta charset="UTF-8">
+              <meta name="viewport" content="width=device-width, initial-scale=1.0">
+              <style>
+                  * { box-sizing: border-box; }
+                  body { 
+                      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+                      margin: 0; padding: 20px; background: #f5f5f5; 
+                  }
+                  .container { max-width: 1200px; margin: 0 auto; background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+                  .header { background: linear-gradient(135deg, #0078d4, #005a9e); color: white; padding: 30px; }
+                  .header h1 { margin: 0; font-size: 28px; }
+                  .header p { margin: 5px 0; opacity: 0.9; }
+                  .dashboard { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; padding: 30px; }
+                  .card { background: white; border-radius: 8px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); border-left: 4px solid #0078d4; }
+                  .card h3 { margin: 0 0 10px 0; color: #333; }
+                  .metric { font-size: 32px; font-weight: bold; color: #0078d4; }
+                  .compliance-status { padding: 20px 30px; }
+                  .status-pass { background: #d4edda; border-left: 4px solid #28a745; }
+                  .status-fail { background: #f8d7da; border-left: 4px solid #dc3545; }
+                  .status-warning { background: #fff3cd; border-left: 4px solid #ffc107; }
+                  .license-table { width: 100%; border-collapse: collapse; margin: 20px 0; }
+                  .license-table th, .license-table td { border: 1px solid #ddd; padding: 12px; text-align: left; }
+                  .license-table th { background: #f8f9fa; font-weight: 600; }
+                  .license-table tr:hover { background: #f8f9fa; }
+                  .badge { padding: 6px 12px; border-radius: 4px; color: white; font-size: 12px; font-weight: 500; }
+                  .badge-success { background: #28a745; }
+                  .badge-warning { background: #ffc107; color: #212529; }
+                  .badge-danger { background: #dc3545; }
+                  .badge-info { background: #17a2b8; }
+                  .progress-bar { width: 100%; height: 20px; background: #e9ecef; border-radius: 10px; overflow: hidden; }
+                  .progress-fill { height: 100%; transition: width 0.3s ease; }
+                  .footer { background: #f8f9fa; padding: 20px 30px; border-top: 1px solid #dee2e6; color: #6c757d; font-size: 14px; }
+                  .section { padding: 0 30px 30px 30px; }
+                  .alert { padding: 15px; margin: 20px 0; border-radius: 4px; }
+                  .alert-danger { background: #f8d7da; border: 1px solid #f5c6cb; color: #721c24; }
+                  .alert-warning { background: #fff3cd; border: 1px solid #ffeaa7; color: #856404; }
+                  .alert-success { background: #d4edda; border: 1px solid #c3e6cb; color: #155724; }
+              </style>
+          </head>
+          <body>
+              <div class="container">
+                  <div class="header">
+                      <h1>🛡️ Enterprise SBOM License Report</h1>
+                      <p><strong>Repository:</strong> $(Build.Repository.Name) | <strong>Branch:</strong> $(Build.SourceBranchName)</p>
+                      <p><strong>Build:</strong> $(Build.BuildNumber) | <strong>Generated:</strong> $(Get-Date -Format "yyyy-MM-dd HH:mm:ss UTC")</p>
+                  </div>
+          "@
+          
+          # Process all license files to calculate metrics
+          $licenseFiles = Get-ChildItem "$reportsDir" -Recurse -Name "license-summary.txt"
+          $allPackages = @()
+          
+          foreach ($licenseFile in $licenseFiles) {
+              $licenseContent = Get-Content "$reportsDir/$licenseFile"
+              foreach ($line in $licenseContent) {
+                  if ($line -match "^(.+?):\s*(.+)$") {
+                      $package = $matches[1].Trim()
+                      $license = $matches[2].Trim()
+                      
+                      $totalPackages++
+                      $packageInfo = @{
+                          Package = $package
+                          License = $license
+                          ProjectType = Split-Path (Split-Path $licenseFile) -Leaf
+                          IsCompliant = $false
+                          Status = "Unknown"
+                      }
+                      
+                      # Check compliance
+                      if ($license -in $allowedLicensesList) {
+                          $packageInfo.IsCompliant = $true
+                          $packageInfo.Status = "Approved"
+                          $compliantPackages++
+                      }
+                      elseif ($license -in $blockedLicensesList) {
+                          $packageInfo.Status = "Blocked"
+                          $blockedPackages += $packageInfo
+                      }
+                      elseif ($license -match "UNKNOWN|NOASSERTION") {
+                          $packageInfo.Status = "Unknown"
+                          $unknownLicenses += $packageInfo
+                      }
+                      else {
+                          $packageInfo.Status = "Review Required"
+                      }
+                      
+                      $allPackages += $packageInfo
+                  }
+              }
+          }
+          
+          # Calculate compliance rate
+          $complianceRate = if ($totalPackages -gt 0) { [math]::Round(($compliantPackages / $totalPackages) * 100, 1) } else { 0 }
+          $complianceStatus = if ($complianceRate -ge $(complianceThreshold)) { "PASS" } elseif ($complianceRate -ge 75) { "WARNING" } else { "FAIL" }
+          
+          # Dashboard metrics
+          $html += @"
+                  <div class="dashboard">
+                      <div class="card">
+                          <h3>📦 Total Packages</h3>
+                          <div class="metric">$totalPackages</div>
+                      </div>
+                      <div class="card">
+                          <h3>✅ Compliant</h3>
+                          <div class="metric">$compliantPackages</div>
+                      </div>
+                      <div class="card">
+                          <h3>🚫 Blocked</h3>
+                          <div class="metric">$($blockedPackages.Count)</div>
+                      </div>
+                      <div class="card">
+                          <h3>❓ Unknown</h3>
+                          <div class="metric">$($unknownLicenses.Count)</div>
+                      </div>
+                  </div>
+          "@
+          
+          # Compliance status
+          $statusClass = switch ($complianceStatus) {
+              "PASS" { "status-pass" }
+              "WARNING" { "status-warning" }
+              "FAIL" { "status-fail" }
+          }
+          
+          $html += @"
+                  <div class="compliance-status $statusClass">
+                      <h2>📊 Compliance Status: $complianceStatus</h2>
+                      <p><strong>Compliance Rate:</strong> $complianceRate% (Threshold: $(complianceThreshold)%)</p>
+                      <div class="progress-bar">
+                          <div class="progress-fill" style="width: $complianceRate%; background: $(if($complianceRate -ge $(complianceThreshold)) {'#28a745'} elseif($complianceRate -ge 75) {'#ffc107'} else {'#dc3545'});"></div>
+                      </div>
+                  </div>
+          "@
+          
+          # Alerts for critical issues
+          if ($blockedPackages.Count -gt 0) {
+              $html += '<div class="section"><div class="alert alert-danger"><h3>🚨 Blocked Licenses Detected</h3><p>The following packages use licenses that are not approved for use:</p><ul>'
+              foreach ($pkg in $blockedPackages) {
+                  $html += "<li><strong>$($pkg.Package)</strong> - $($pkg.License)</li>"
+              }
+              $html += '</ul></div></div>'
+          }
+          
+          if ($unknownLicenses.Count -gt 0) {
+              $html += '<div class="section"><div class="alert alert-warning"><h3>⚠️ Unknown Licenses</h3><p>The following packages have unknown or unresolved licenses:</p><ul>'
+              foreach ($pkg in $unknownLicenses) {
+                  $html += "<li><strong>$($pkg.Package)</strong> - $($pkg.License)</li>"
+              }
+              $html += '</ul></div></div>'
+          }
+          
+          # License details table
+          $html += @"
+                  <div class="section">
+                      <h2>📋 License Details</h2>
+                      <table class="license-table">
+                          <thead>
+                              <tr>
+                                  <th>Package</th>
+                                  <th>License</th>
+                                  <th>Status</th>
+                                  <th>Project Type</th>
+                              </tr>
+                          </thead>
+                          <tbody>
+          "@
+          
+          foreach ($pkg in $allPackages) {
+              $badgeClass = switch ($pkg.Status) {
+                  "Approved" { "badge-success" }
+                  "Blocked" { "badge-danger" }
+                  "Unknown" { "badge-warning" }
+                  "Review Required" { "badge-info" }
+              }
+              
+              $html += @"
+                          <tr>
+                              <td>$($pkg.Package)</td>
+                              <td>$($pkg.License)</td>
+                              <td><span class="badge $badgeClass">$($pkg.Status)</span></td>
+                              <td>$($pkg.ProjectType)</td>
+                          </tr>
+          "@
+          }
+          
+          $html += @"
+                          </tbody>
+                      </table>
+                  </div>
+                  <div class="footer">
+                      <p>Generated by SBOM License Scanner | Build $(Build.BuildNumber) | $(Get-Date -Format "yyyy-MM-dd HH:mm:ss UTC")</p>
+                      <p>Compliance Threshold: $(complianceThreshold)% | Allowed Licenses: $(allowedLicenses)</p>
+                  </div>
+              </div>
+          </body>
+          </html>
+          "@
+          
+          # Write HTML report
+          $html | Out-File -FilePath $htmlReport -Encoding UTF8
+          
+          # Generate compliance JSON for pipeline decisions
+          $complianceData = @{
+              totalPackages = $totalPackages
+              compliantPackages = $compliantPackages
+              complianceRate = $complianceRate
+              complianceStatus = $complianceStatus
+              blockedPackages = $blockedPackages.Count
+              unknownLicenses = $unknownLicenses.Count
+              threshold = $(complianceThreshold)
+              buildId = "$(Build.BuildId)"
+              timestamp = (Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ")
+          } | ConvertTo-Json -Depth 3
+          
+          $complianceData | Out-File -FilePath $complianceReport -Encoding UTF8
+          
+          Write-Host "Enterprise HTML report generated: $htmlReport"
+          Write-Host "Compliance data: $complianceReport"
+          Write-Host "##vso[task.setvariable variable=ComplianceRate]$complianceRate"
+          Write-Host "##vso[task.setvariable variable=ComplianceStatus]$complianceStatus"
+    
+    - task: PublishBuildArtifacts@1
+      displayName: 'Publish SBOM Reports'
+      inputs:
+        pathToPublish: '$(Build.ArtifactStagingDirectory)/sbom-reports'
+        artifactName: 'enterprise-sbom-reports'
+    
+    - task: PublishTestResults@2
+      displayName: 'Publish Compliance Results'
+      condition: always()
+      inputs:
+        testResultsFormat: 'JUnit'
+        testResultsFiles: '$(Build.ArtifactStagingDirectory)/sbom-reports/compliance-summary.json'
+        testRunTitle: 'License Compliance Check'
+
+- stage: Compliance_Gate
+  displayName: 'License Compliance Gate'
+  dependsOn: SBOM_Analysis
+  condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+  jobs:
+  - deployment: ComplianceApproval
+    displayName: 'License Compliance Review'
+    environment: 'production-compliance'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - task: PowerShell@2
+            displayName: 'Compliance Decision'
+            inputs:
+              targetType: 'inline'
+              script: |
+                $complianceRate = [float]"$(ComplianceRate)"
+                $threshold = [float]"$(complianceThreshold)"
+                
+                Write-Host "Compliance Rate: $complianceRate%"
+                Write-Host "Required Threshold: $threshold%"
+                
+                if ($complianceRate -lt $threshold) {
+                    Write-Host "##vso[task.logissue type=error]License compliance below threshold ($complianceRate% < $threshold%)"
+                    Write-Host "##vso[task.complete result=Failed;]License compliance check failed"
+                    exit 1
+                } else {
+                    Write-Host "##vso[task.logissue type=success]License compliance passed ($complianceRate% >= $threshold%)"
+                    Write-Host "Deployment approved for production"
+                }
+          
+          - task: EmailReport@1
+            displayName: 'Send Compliance Report'
+            inputs:
+              sendMailConditionConfig: 'Always'
+              to: '$(NotificationEmail)'
+              subject: 'SBOM License Compliance Report - $(Build.Repository.Name)'
+              body: |
+                License compliance scan completed for $(Build.Repository.Name).
+                
+                Compliance Rate: $(ComplianceRate)%
+                Status: $(ComplianceStatus)
+                Build: $(Build.BuildNumber)
+                
+                View detailed report: $(System.TeamFoundationCollectionUri)$(System.TeamProject)/_build/results?buildId=$(Build.BuildId)
+              attachmentsPattern: '$(Pipeline.Workspace)/enterprise-sbom-reports/enterprise-license-report.html'
