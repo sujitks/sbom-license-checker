@@ -5,7 +5,7 @@
 **/build/
 **/__pycache__/
 **/node_modules/
-
+**/test-output
 # SBOM outputs (should be generated, not committed)
 **/*.spdx.json
 **/*.spdx
