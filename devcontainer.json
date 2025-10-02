@@ -1,0 +1,73 @@
+{
+    "name": "SBOM Scanner Development",
+    "build": {
+        "dockerfile": "../docker-sbom-scanner/Dockerfile",
+        "context": "../docker-sbom-scanner",
+        "args": {
+            "BUILDKIT_INLINE_CACHE": "1"
+        }
+    },
+    
+    "features": {
+        "ghcr.io/devcontainers/features/git:1": {},
+        "ghcr.io/devcontainers/features/github-cli:1": {}
+    },
+    
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "ms-vscode.vscode-json",
+                "redhat.vscode-yaml",
+                "ms-dotnettools.csharp",
+                "ms-vscode.vscode-typescript-next",
+                "ms-python.python",
+                "ms-azuretools.vscode-docker",
+                "GitHub.copilot",
+                "GitHub.copilot-chat",
+                "ms-vscode.powershell",
+                "redhat.ansible"
+            ],
+            "settings": {
+                "terminal.integrated.defaultProfile.linux": "bash",
+                "files.eol": "\n",
+                "editor.formatOnSave": true,
+                "editor.codeActionsOnSave": {
+                    "source.organizeImports": "explicit"
+                }
+            }
+        }
+    },
+    
+    "containerEnv": {
+        "SBOM_OUTPUT_DIR": "/workspace/sbom-reports",
+        "DOTNET_CLI_TELEMETRY_OPTOUT": "1",
+        "DOTNET_SKIP_FIRST_TIME_EXPERIENCE": "1",
+        "NODE_ENV": "development"
+    },
+    
+    "postCreateCommand": [
+        "bash", "-c", 
+        "echo 'Setting up development environment...' && chmod +x /app/*.sh && echo 'SBOM Scanner Development Environment Ready!' && /app/entrypoint.sh --version"
+    ],
+    
+    "workspaceFolder": "/workspace",
+    "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind",
+    
+    "forwardPorts": [3000, 5000, 8080, 9229],
+    "portsAttributes": {
+        "3000": {
+            "label": "Node.js App"
+        },
+        "5000": {
+            "label": ".NET App"
+        },
+        "8080": {
+            "label": "Python App"
+        },
+        "9229": {
+            "label": "Node.js Debug"
+        }
+    },
+    
+    "remoteUser": "sbom"
+}

@@ -222,7 +222,7 @@ health_check() {
     else
         echo -e "${RED}✗ SBOM Tool not available${NC}"
         echo -e "${YELLOW}Attempting to locate dotnet tools...${NC}"
-        find /home /root -name "sbom-tool" 2>/dev/null | head -5
+        which sbom-tool || find /home /root -name "sbom-tool" 2>/dev/null | head -5
         health_status=1
     fi
     
