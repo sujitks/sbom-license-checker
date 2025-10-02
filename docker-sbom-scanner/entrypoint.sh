@@ -216,13 +216,9 @@ health_check() {
         health_status=1
     fi
     
-    # Check SBOM Tool (try multiple approaches)
-    if command -v sbom-tool >/dev/null 2>&1; then
-        echo -e "${GREEN}✓ SBOM Tool available via command${NC}"
-    elif /home/sbom/.dotnet/tools/sbom-tool --version >/dev/null 2>&1; then
-        echo -e "${GREEN}✓ SBOM Tool available in sbom user path${NC}"
-    elif /root/.dotnet/tools/sbom-tool --version >/dev/null 2>&1; then
-        echo -e "${GREEN}✓ SBOM Tool available in root path${NC}"
+    # Check SBOM Tool
+    if sbom-tool --version >/dev/null 2>&1; then
+        echo -e "${GREEN}✓ SBOM Tool available${NC}"
     else
         echo -e "${RED}✗ SBOM Tool not available${NC}"
         echo -e "${YELLOW}Attempting to locate dotnet tools...${NC}"
